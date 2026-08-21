@@ -15,7 +15,6 @@ __pycache__/
 *.bin
 !adapters/.gitkeep
 data/split/
-data/CUSTOM_DATASET.md
 !results/.gitkeep
 gguf/
 *.gguf

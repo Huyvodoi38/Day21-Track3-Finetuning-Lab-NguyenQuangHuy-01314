@@ -123,8 +123,34 @@ Qua các thí nghiệm đối chứng, đòn bẩy kỹ thuật mang tính quy�
 
 ## Phụ lục — thưởng đã làm
 
-- [ ] B1 NB6 merge + hot-swap
-- [ ] B2 dataset miền riêng (`data/CUSTOM_DATASET.md`)
-- [ ] B3 reasoning-trace collapse (hai `MASK_MODE`, kèm `valid_trace_rate`)
-- [ ] B4 quét rank có kiểm soát
-- [ ] B5 HuggingFace Hub — link:
+- [x] B1 NB6 merge + hot-swap
+  * **Kết quả đo thực tế (`results/merge_check.json`)**:
+    - Độ chính xác trước merge: `0.9700` (97.0%)
+    - Độ chính xác sau merge: `0.9700` (97.0%)
+    - Độ lệch $\Delta$: `+0.0000` (thỏa mãn ngưỡng an toàn $\Delta \ge -0.01$)
+  * **Phân tích (deck §18)**: Phép gộp trọng số $W = W_0 + \frac{\alpha}{r}BA$ triệt tiêu hoàn toàn overhead tính toán của adapter khi serving, giúp latency đạt mức tối ưu như base model gốc. Tuy nhiên, merge làm mất đi tính linh hoạt đa người thuê (multi-tenancy) vì trọng số bị gộp cố định vào model, mỗi task mới sẽ tốn thêm ~10 GB VRAM để nạp một base model riêng biệt. Ta nên giữ adapter riêng khi cần phục vụ nhiều nghiệp vụ/khách hàng khác nhau trên cùng một hạ tầng GPU duy nhất, chia sẻ chung 1 base model trong VRAM và chỉ hot-swap adapter vài chục MB theo từng request.
+- [x] B2 dataset miền riêng (`data/CUSTOM_DATASET.md`)
+  * Tài liệu chi tiết tại `data/CUSTOM_DATASET.md` với 250 mẫu dữ liệu phân loại ticket CSKH E-commerce tiếng Việt, đầy đủ quy trình khử nhiễm 13-gram overlap và phân tích tính lệch phân phối (OOD).
+- [x] B3 reasoning-trace collapse (hai `MASK_MODE`, kèm `valid_trace_rate`)
+  * **Bảng so sánh hai chế độ Mask (deck §13.5)**:
+    | MASK_MODE | Target | **valid_trace_rate** | Regression | Triage Format |
+    |---|:---:|:---:|:---:|:---:|
+    | `assistant-only` | 0.9700 | **0.00%** | 0.6111 | 1.0000 |
+    | `response-only` | 0.9700 | **0.00%** | 0.6111 | 1.0000 |
+  * **Phân tích hiện tượng (Reasoning Collapse)**:
+    - Trên tập dữ liệu 250 mẫu câu trả lời là JSON thuần túy (không chứa chuỗi suy luận trong thẻ `<think>`), cả hai chế độ `assistant-only` và `response-only` đều đạt `target = 0.9700` nhưng `valid_trace_rate` hoàn toàn sụp đổ về **0.00%**.
+    - Model đã học được cách "đi tắt" (shortcut learning): sinh ngay kết quả JSON mà triệt tiêu hoàn toàn khả năng tư duy từng bước. Điều này giải thích trực tiếp tại sao `regression` tụt từ 0.7578 xuống 0.6111 (-14.7%).
+    - **Kết luận then chốt**: Nếu chỉ nhìn vào điểm `target` (tăng từ 76.5% lên 97%) hoặc Perplexity, ta sẽ hoàn toàn ngộ nhận rằng model hoạt động hoàn hảo. Đánh giá đa chiều (Multidimensional Evaluation) qua Regression Gate và Trace Rate là bắt buộc để phát hiện sự suy thoái tiềm ẩn này.
+- [x] B4 quét rank có kiểm soát
+  * **Bảng thực nghiệm quét Rank $r \in \{8, 16, 64\}$ trên nền cố định `target_modules="text-linear"`**:
+    | Rank ($r$) | Trainable Params | Train Loss | Target Accuracy | Format | Train Time (s) | VRAM (GB) |
+    |:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+    | **$r=8$** | 16,232,448 | 0.6892 | 0.9400 | 1.0000 | 915.2s | 11.95 GB |
+    | **$r=16$ (Chuẩn)** | 32,464,896 | 0.6261 | **0.9700** | 1.0000 | 964.0s | 12.01 GB |
+    | **$r=64$** | 129,859,584 | 0.5820 | **0.9700** | 1.0000 | 1042.8s | 12.45 GB |
+  * **Phân tích đòn bẩy & Xếp hạng 3 nút vặn (deck §10)**:
+    1. 🥇 **Learning Rate (Đòn bẩy sống còn)**: Biên độ chênh lệch cực lớn: $1\times 10^{-5}$ (`wrong_lr`) cho Target = 0.0000 trong khi $1\times 10^{-4}$ cho Target = 0.9700 (Biên độ $\Delta = 97.0\%$). Chọn sai thang LR sẽ khiến LoRA hoàn toàn tê liệt.
+    2. 🥈 **Vị trí gắn Adapter (Đòn bẩy kiến trúc)**: Gắn `text-linear` ở $r=16$ mang lại hiệu quả tương đương `attn_only` ở $r=283$, nhưng giảm đáng kể kích thước rank cục bộ và phân bổ đều độ thích ứng trên toàn bộ mạng.
+    3. 🥉 **Rank (Đòn bẩy bão hòa)**: Nâng từ $r=8 \rightarrow r=16$ cải thiện nhẹ target từ 0.94 lên 0.97, nhưng nâng tiếp từ $r=16 \rightarrow r=64$ thì target hoàn toàn đi ngang ở 0.9700 dù số tham số tăng gấp 4 lần.
+    - **Lý giải**: Tập dữ liệu 250 mẫu chỉ chứa bài toán trích xuất 4 trường cố định, lượng entropy thông tin hữu ích trong dữ liệu bị bão hòa ở $r=16$. Rank đại diện cho *dung lượng biểu diễn so với dung lượng thông tin của dữ liệu*, không phải nút vặn càng tăng càng tốt.
+- [x] B5 HuggingFace Hub — link: https://huggingface.co/huyvodoi38/qwen35-4b-cskh-triage-lora
